@@ -1,178 +1,190 @@
-import base64
 import json
 import os
-import re
 import requests
-import yt_dlp
+from http.server import BaseHTTPRequestHandler
 
-# Настройки твоего репозитория
-GITHUB_TOKEN = input("Вставь GitHub Token (ghp_...): ").strip()
-REPO_OWNER = "tubus699-cpu"
-REPO_NAME = "Alice-Qwen"
-RELEASE_TAG = "v1.0-music"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Список треков: ключевое слово для Алисы -> поисковый запрос на YouTube
-TRACKS_TO_GET = [
-    {
-        "keyword": "морские животные",
+TRACKS = {
+    "тест": {
+        "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        "title": "Тестовая музыка",
+    },
+    "морские животные": {
+        "url": "https://example.com/morskie.mp3",
         "title": "Малышарики — Морские животные",
-        "query": "Малышарики Морские животные песня",
     },
-    {
-        "keyword": "таинственный тортоежка",
+    "таинственный тортоежка": {
+        "url": "https://example.com/tortoedka.mp3",
         "title": "Три Кота — Таинственный тортоежка",
-        "query": "Три кота Таинственный тортоежка песня",
     },
-    {
-        "keyword": "умный дом",
+    "умный дом": {
+        "url": "https://example.com/umny_dom.mp3",
         "title": "Три Кота — Умный дом",
-        "query": "Три кота Умный дом песня",
     },
-    {
-        "keyword": "компот",
+    "компот": {
+        "url": "https://example.com/kompot.mp3",
         "title": "Кукутики — На столе стоит компот",
-        "query": "Кукутики На столе стоит компот",
     },
-    {
-        "keyword": "кузнечик",
+    "кузнечик": {
+        "url": "https://example.com/kuznechik.mp3",
         "title": "В траве сидел кузнечик",
-        "query": "В траве сидел кузнечик песня детская",
     },
-    {
-        "keyword": "колобок",
+    "колобок": {
+        "url": "https://example.com/kolobok.mp3",
         "title": "Сказка Колобок",
-        "query": "Сказка Колобок аудиосказка",
     },
-]
-
-HEADERS = {
-    "Authorization": f"token {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github.v3+json",
+    "кот лиса и петух": {
+        "url": "https://example.com/kot_lisa.mp3",
+        "title": "Сказка Кот, петух и лиса",
+    },
 }
 
-
-def download_audio(query, output_filename):
-  """Ищет на YouTube и скачивает чистую аудиодорожку AAC/M4A без перекодирования."""
-  print(f"[1/4] Поиск и загрузка: {query}...")
-  ydl_opts = {
-      "format": "ba[ext=m4a]/bestaudio/best",
-      "outtmpl": output_filename,
-      "default_search": "ytsearch1:",
-      "quiet": True,
-      "no_warnings": True,
-  }
-  with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-    ydl.download([query])
-  return output_filename
-
-
-def get_or_create_release():
-  """Находит или создает релиз на GitHub для хранения музыки."""
-  print(f"[2/4] Подготовка GitHub Release ({RELEASE_TAG})...")
-  url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/tags/{RELEASE_TAG}"
-  res = requests.get(url, headers=HEADERS)
-
-  if res.status_code == 200:
-    return res.json()["upload_url"].split("{")[0]
-
-  # Если релиза нет — создаем новый
-  create_url = (
-      f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases"
-  )
-  payload = {
-      "tag_name": RELEASE_TAG,
-      "name": "Музыкальный каталог для Алисы",
-      "body": "Прямые ссылки на аудиодорожки без подписки",
-  }
-  create_res = requests.post(create_url, headers=HEADERS, json=payload)
-  if create_res.status_code != 201:
-    raise RuntimeError(f"Ошибка создания релиза: {create_res.text}")
-  return create_res.json()["upload_url"].split("{")[0]
+SYSTEM_PROMPT = (
+    "Твое имя — Квен (Qwen). Ты передовой искусственный интеллект, голосовой"
+    " помощник и добрый друг.\n"
+    "СТРОГОЕ ПРАВИЛО: Ты НИКОГДА не называешь себя Алисой. Ты НЕ Алиса и не"
+    " имеешь к ней отношения. Если спрашивают «Кто ты?» — ты искусственный"
+    " интеллект Квен.\n\n"
+    "ПРАВИЛА ОЗВУЧКИ:\n"
+    "1. Никогда не используй списки, звездочки (*), решетки (#) и эмодзи —"
+    " текст зачитывается вслух через динамик колонки, говори естественной живой"
+    " речью.\n\n"
+    "РЕЖИМЫ РЕЧИ И СМЕНА СТИЛЯ:\n"
+    "1. СТИЛЬ ПО УМОЛЧАНИЮ: Если нет особых указаний, отвечай емко, просто и"
+    " понятно для ребенка — ровно 1–3 предложения.\n"
+    "2. АДАПТАЦИЯ (ПРИОРИТЕТ): Если пользователь явно просит сменить манеру"
+    " речи (например: «говори длинно», «объясни подробно и в деталях»,"
+    " «расскажи длинную сказку», «говори как пират», «отвечай стихами» и т.п.)"
+    " — ТЫ ОБЯЗАН БЕЗОГОВОРОЧНО ПОДЧИНИТЬСЯ. В этом случае отменяй ограничение"
+    " в 1–3 предложения и говори именно так и столько, сколько попросил"
+    " собеседник."
+)
 
 
-def upload_to_release(upload_url, file_path, asset_name):
-  """Заливает аудиофайл в GitHub Release и возвращает прямую ссылку."""
-  print(f"[3/4] Загрузка файла {asset_name} в GitHub CDN...")
-  with open(file_path, "rb") as f:
-    upload_res = requests.post(
-        f"{upload_url}?name={asset_name}",
-        headers={
-            "Authorization": f"token {GITHUB_TOKEN}",
-            "Content-Type": "audio/mp4",
-        },
-        data=f,
+def pick_best_active_model(api_key):
+  try:
+    res = requests.get(
+        "https://api.groq.com/openai/v1/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=1.5,
     )
-
-  if upload_res.status_code == 201:
-    return upload_res.json()["browser_download_url"]
-  elif upload_res.status_code == 422:
-    # Файл уже существует
-    return f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{RELEASE_TAG}/{asset_name}"
-  else:
-    raise RuntimeError(f"Ошибка загрузки ассета: {upload_res.text}")
-
-
-def update_repo_code(new_tracks_dict):
-  """Скачивает api/index.py с GitHub, заменяет TRACKS и пушит коммит."""
-  print("[4/4] Автоматическое обновление api/index.py на GitHub...")
-  url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/api/index.py"
-  res = requests.get(url, headers=HEADERS)
-  if res.status_code != 200:
-    raise RuntimeError(f"Не удалось получить index.py: {res.text}")
-
-  file_data = res.json()
-  sha = file_data["sha"]
-  current_code = base64.b64decode(file_data["content"]).decode("utf-8")
-
-  # Форматируем новый словарь
-  formatted_tracks = "TRACKS = " + json.dumps(
-      new_tracks_dict, ensure_ascii=False, indent=4
-  )
-
-  # Заменяем блок TRACKS в коде
-  updated_code = re.sub(
-      r"TRACKS\s*=\s*\{.*?\n\}", formatted_tracks, current_code, flags=re.DOTALL
-  )
-
-  # Отправляем коммит прямо в ветку main
-  commit_payload = {
-      "message": "Авто-обновление аудиокаталога (real audio links)",
-      "content": base64.b64encode(updated_code.encode("utf-8")).decode("utf-8"),
-      "sha": sha,
-  }
-  put_res = requests.put(url, headers=HEADERS, json=commit_payload)
-  if put_res.status_code in [200, 201]:
-    print("\n ГОТОВО! Репозиторий обновлен.")
-    print("Vercel подхватит изменения через 20 секунд.")
-  else:
-    print(f"\n Ошибка коммита: {put_res.text}")
+    if res.status_code == 200:
+      models_data = res.json().get("data", [])
+      chat_ids = [
+          m["id"]
+          for m in models_data
+          if not any(
+              bad in m["id"].lower()
+              for bad in ["whisper", "guard", "embed", "safeguard", "tool"]
+          )
+      ]
+      for mid in chat_ids:
+        if "qwen" in mid.lower():
+          return mid
+      for mid in chat_ids:
+        if "llama" in mid.lower():
+          return mid
+      if chat_ids:
+        return chat_ids[0]
+  except Exception:
+    pass
+  return "llama-3.3-70b-versatile"
 
 
-def main():
-  os.makedirs("temp_music", exist_ok=True)
-  upload_url = get_or_create_release()
-  new_tracks = {}
+class handler(BaseHTTPRequestHandler):
 
-  for i, item in enumerate(TRACKS_TO_GET):
-    safe_name = f"track_{i+1}.m4a"
-    local_path = os.path.join("temp_music", safe_name)
+  def do_POST(self):
+    content_length = int(self.headers.get("Content-Length", 0))
+    post_data = self.rfile.read(content_length)
+    body = json.loads(post_data.decode("utf-8"))
 
-    # 1. Скачиваем трек
-    download_audio(item["query"], local_path)
+    user_text = body.get("request", {}).get("command", "").lower().strip()
+    response_payload = {}
 
-    # 2. Заливаем в релиз
-    direct_url = upload_to_release(upload_url, local_path, safe_name)
+    if body.get("session", {}).get("new", False) or not user_text:
+      response_payload = {
+          "text": (
+              "Привет! На связи искусственный интеллект Квен. Спроси меня о чем"
+              " угодно или назови песенку!"
+          ),
+          "end_session": False,
+      }
 
-    # 3. Добавляем в каталог
-    new_tracks[item["keyword"]] = {"url": direct_url, "title": item["title"]}
+    elif any(word in user_text for word in ["стоп", "хватит", "пауза"]):
+      response_payload = {
+          "text": "Останавливаю воспроизведение.",
+          "directives": {"audio_player": {"action": "Stop"}},
+          "end_session": False,
+      }
 
-    # Удаляем временный файл с диска
-    if os.path.exists(local_path):
-      os.remove(local_path)
+    else:
+      matched_track = None
+      for keyword, data in TRACKS.items():
+        if keyword in user_text:
+          matched_track = data
+          break
 
-  # 4. Обновляем код в репозитории
-  update_repo_code(new_tracks)
+      if matched_track:
+        response_payload = {
+            "text": f"Включаю: {matched_track['title']}!",
+            "directives": {
+                "audio_player": {
+                    "action": "Play",
+                    "item": {
+                        "stream": {
+                            "url": matched_track["url"],
+                            "offset_ms": 0,
+                            "token": matched_track["title"],
+                        },
+                        "metadata": {
+                            "title": matched_track["title"],
+                            "sub_title": "Любимые треки",
+                        },
+                    },
+                }
+            },
+            "end_session": False,
+        }
 
+      else:
+        if not GROQ_API_KEY:
+          answer = "В настройках Vercel не найден GROQ_API_KEY."
+        else:
+          active_model = pick_best_active_model(GROQ_API_KEY)
+          try:
+            groq_resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                json={
+                    "model": active_model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_text},
+                    ],
+                    "max_tokens": 400,
+                    "temperature": 0.7,
+                },
+                timeout=3.5,
+            )
 
-if __name__ == "__main__":
-  main()
+            if groq_resp.status_code == 200:
+              answer = groq_resp.json()["choices"][0]["message"]["content"]
+            else:
+              answer = (
+                  f"Сбой {active_model} ({groq_resp.status_code}):"
+                  f" {groq_resp.text[:120]}"
+              )
+          except Exception as e:
+            answer = f"Ошибка связи: {str(e)}"
+
+        response_payload = {"text": answer, "end_session": False}
+
+    self.send_response(200)
+    self.send_header("Content-Type", "application/json")
+    self.end_headers()
+    self.wfile.write(
+        json.dumps({"response": response_payload, "version": "1.0"}).encode(
+            "utf-8"
+        )
+    )
