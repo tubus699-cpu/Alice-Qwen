@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Каталог любимых треков и сказок (пока с заглушками, ссылки вставим позже)
+# Каталог любимых треков и сказок (ссылки заменим на постоянные позже)
 TRACKS = {
     "морские животные": {
         "url": "https://example.com/morskie.mp3",
@@ -96,14 +96,17 @@ class handler(BaseHTTPRequestHandler):
             "end_session": False,
         }
 
-      # 4. Если трек не найден — отвечает Qwen через Groq
+      # 4. Если трек не найден — отвечает нейросеть
       else:
         try:
+          if not GROQ_API_KEY:
+            raise ValueError("В Vercel не найдена переменная GROQ_API_KEY")
+
           groq_resp = requests.post(
               "https://api.groq.com/openai/v1/chat/completions",
               headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
               json={
-                  "model": "qwen-2.5-32b",
+                  "model": "llama-3.1-8b-instant",
                   "messages": [
                       {
                           "role": "system",
@@ -119,13 +122,17 @@ class handler(BaseHTTPRequestHandler):
                   "max_tokens": 150,
                   "temperature": 0.7,
               },
-              timeout=3.0,
+              timeout=3.5,
           )
+
+          if groq_resp.status_code != 200:
+            raise ValueError(
+                f"Ошибка API ({groq_resp.status_code}): {groq_resp.text[:100]}"
+            )
+
           answer = groq_resp.json()["choices"][0]["message"]["content"]
-        except Exception:
-          answer = (
-              "Что-то связь забарахлила. Спроси еще разок или включи песенку!"
-          )
+        except Exception as e:
+          answer = f"Сбой: {str(e)}"
 
         response_payload = {"text": answer, "end_session": False}
 
