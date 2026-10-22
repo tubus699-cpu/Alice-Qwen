@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Каталог любимых треков и сказок (ссылки заменим на постоянные позже)
+# Каталог любимых треков и сказок
 TRACKS = {
     "морские животные": {
         "url": "https://example.com/morskie.mp3",
@@ -36,6 +36,13 @@ TRACKS = {
         "title": "Сказка Кот, петух и лиса",
     },
 }
+
+# Список стабильных бесплатных моделей Groq для автоподбора
+MODELS_TO_TRY = [
+    "llama-3.3-70b-versatile",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+]
 
 
 class handler(BaseHTTPRequestHandler):
@@ -96,43 +103,53 @@ class handler(BaseHTTPRequestHandler):
             "end_session": False,
         }
 
-      # 4. Если трек не найден — отвечает нейросеть
+      # 4. Если трек не запрошен — опрашиваем нейросеть
       else:
-        try:
-          if not GROQ_API_KEY:
-            raise ValueError("В Vercel не найдена переменная GROQ_API_KEY")
+        answer = None
+        last_error = ""
 
-          groq_resp = requests.post(
-              "https://api.groq.com/openai/v1/chat/completions",
-              headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-              json={
-                  "model": "llama-3.1-8b-instant",
-                  "messages": [
-                      {
-                          "role": "system",
-                          "content": (
-                              "Ты дружелюбный детский голосовой помощник."
-                              " Отвечай живо, интересно, простыми словами для"
-                              " ребенка. Не пиши списков и спецсимволов. Длина"
-                              " ответа — 1-3 предложения."
-                          ),
-                      },
-                      {"role": "user", "content": user_text},
-                  ],
-                  "max_tokens": 150,
-                  "temperature": 0.7,
-              },
-              timeout=3.5,
-          )
+        if not GROQ_API_KEY:
+          answer = "В Vercel не настроен GROQ_API_KEY."
+        else:
+          for model_name in MODELS_TO_TRY:
+            try:
+              groq_resp = requests.post(
+                  "https://api.groq.com/openai/v1/chat/completions",
+                  headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                  json={
+                      "model": model_name,
+                      "messages": [
+                          {
+                              "role": "system",
+                              "content": (
+                                  "Ты дружелюбный детский голосовой помощник."
+                                  " Отвечай живо, интересно, простыми словами"
+                                  " для ребенка. Не используй списков и"
+                                  " форматирования. Длина ответа: 1-3"
+                                  " предложения."
+                              ),
+                          },
+                          {"role": "user", "content": user_text},
+                      ],
+                      "max_tokens": 150,
+                      "temperature": 0.7,
+                  },
+                  timeout=3.2,
+              )
 
-          if groq_resp.status_code != 200:
-            raise ValueError(
-                f"Ошибка API ({groq_resp.status_code}): {groq_resp.text[:100]}"
-            )
+              if groq_resp.status_code == 200:
+                answer = groq_resp.json()["choices"][0]["message"]["content"]
+                break
+              else:
+                last_error = (
+                    f"{model_name} ({groq_resp.status_code}):"
+                    f" {groq_resp.text[:80]}"
+                )
+            except Exception as e:
+              last_error = str(e)
 
-          answer = groq_resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-          answer = f"Сбой: {str(e)}"
+          if not answer:
+            answer = f"Сбой моделей: {last_error}"
 
         response_payload = {"text": answer, "end_session": False}
 
